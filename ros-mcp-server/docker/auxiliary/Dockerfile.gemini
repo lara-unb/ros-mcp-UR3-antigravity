@@ -1,0 +1,53 @@
+FROM ubuntu:22.04
+
+# Avoid interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install essential dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    curl \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js (needed for gemini-cli)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install gemini-cli globally
+RUN npm install -g @google/gemini-cli
+
+# Install uv for fast Python package management
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+
+# Create and set working directory
+WORKDIR /app
+
+# Copy the current repository into the container
+COPY . .
+
+# Install the ros-mcp-server package from source
+RUN uv pip install --system .
+
+# Initialize Gemini CLI configuration with the MCP server
+RUN mkdir -p /root/.gemini && \
+    echo '{ \
+      "mcpServers": { \
+        "ros-mcp-server": { \
+          "command": "ros-mcp", \
+          "args": ["--transport=stdio"] \
+        } \
+      } \
+    }' > /root/.gemini/settings.json
+
+# Expose common ROS ports (informational)
+EXPOSE 9090
+
+# Set the default entrypoint to gemini
+# This allows you to run 'docker run ... gemini "Ask something"'
+ENTRYPOINT ["gemini"]

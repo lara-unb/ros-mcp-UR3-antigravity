@@ -1,0 +1,33 @@
+services:
+  antigravity-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.antigravity
+      # network: host é necessário se você estiver em uma rede restrita durante o build
+      network: host
+    container_name: antigravity-mcp
+    # network_mode: host permite acessar o URSim no host via 'localhost'
+    network_mode: "host"
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./ros-mcp-server/robot_specifications:/app/ros-mcp-server/robot_specifications
+      # O volume agora é gerenciado pelo entrypoint.sh para evitar perda de dados
+      - antigravity-config:/root/.gemini
+
+  rosbridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.rosbridge
+      network: host
+    container_name: rosbridge
+    # network_mode: host permite que o rosbridge fale com o URSim na porta 9090 do host
+    network_mode: "host"
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    restart: unless-stopped
+
+volumes:
+  antigravity-config:

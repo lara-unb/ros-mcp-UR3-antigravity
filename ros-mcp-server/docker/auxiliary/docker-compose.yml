@@ -1,0 +1,19 @@
+services:
+  gemini-mcp:
+    build:
+      context: ../..
+      dockerfile: docker/auxiliary/Dockerfile.gemini
+    container_name: gemini-mcp
+    # network_mode: host is recommended to reach URSim on localhost:9090
+    # alternatively, use the service name if URSim is in the same docker-compose
+    network_mode: "host"
+    environment:
+      - GEMINI_API_KEY=${AIzaSyDRgCV_jSprGfBODoK3FezqlkF_O01it8Q}
+    stdin_open: true
+    tty: true
+    volumes:
+      - ../../robot_specifications:/app/robot_specifications
+      - gemini-config:/root/.gemini
+
+volumes:
+  gemini-config:

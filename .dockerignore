@@ -1,0 +1,4 @@
+vendor/images
+.git
+gemini-cli/node_modules
+ros-mcp-server/.venv
