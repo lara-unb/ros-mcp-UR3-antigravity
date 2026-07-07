@@ -1,0 +1,44 @@
+    sim = require'sim'
+    simROS2 = require'simROS2'
+  
+    function sysCall_init()
+        self = sim.getObject('.')
+        
+        -- Tenta pegar a base do UR3 para usar como referencial!
+        ur3Base = sim.getObject('/UR3')
+        if ur3Base == -1 then
+            ur3Base = sim.getObject('UR3')
+            if ur3Base == -1 then
+                sim.addLog(sim.verbosity_errors, "Script do Bowl não encontrou o UR3! Verifique o nome.")
+            end
+        end
+        
+        -- Voltando para o Pose simples para não precisar recompilar o plugin
+        pub = simROS2.createPublisher('/bowl_pose', 'geometry_msgs/msg/Pose')
+    end
+  
+    function sysCall_sensing()
+        if pub and ur3Base ~= -1 then
+            -- Pega posição e orientação relativa à base do UR3
+            local p = sim.getObjectPosition(self, ur3Base)
+            local q = sim.getObjectQuaternion(self, ur3Base)
+            
+            -- Transforma para o padrão do ROS/UR3 Real (Giro de -90 graus no eixo Z)
+            -- Onde o antigo Y vira o novo X (frente)
+            -- E o antigo X vira o novo -Y (direita/esquerda)
+            local ros_x = p[2]
+            local ros_y = -p[1]
+            local ros_z = p[3]
+            
+            -- Publica a mensagem Pose corrigida
+            simROS2.publish(pub, {
+                position = {x=ros_x, y=ros_y, z=ros_z},
+                orientation = {x=q[1], y=q[2], z=q[3], w=q[4]}
+            })
+        end
+    end
+  
+    function sysCall_cleanup()
+        if pub then simROS2.shutdownPublisher(pub) end
+    end 
+
