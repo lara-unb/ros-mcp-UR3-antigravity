@@ -1,7 +1,7 @@
 # Iniciar docker com  URSim
 ros2 run ur_client_library start_ursim.sh -m ur3 -i 192.168.56.101
 
-# Após iniciar com robô "Normal":
+# Após iniciar com robô "Normal" no URSim:
 source /opt/ros/humble/setup.bash 
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur3 \
@@ -14,6 +14,12 @@ ros2 launch ur_robot_driver ur_control.launch.py \
   robot_ip:=192.168.56.101 \
   launch_rviz:=true \
   reverse_ip:=192.168.56.1
+
+# Iniciar driver para conectar com UR3 real (conferir IP):
+ros2 launch ur_robot_driver ur_control.launch.py \
+      ur_type:=ur3 \
+      robot_ip:=192.168.1.102 \
+      launch_rviz:=true
 
 # Como instalar o Antigravity:
 curl -fsSL https://antigravity.google/cli/install.sh | bash
