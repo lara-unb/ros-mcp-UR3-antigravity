@@ -21,3 +21,4 @@ rm -rf ros-mcp-server/.venv
 
 echo "✅ Limpeza concluída!"
 echo "Agora você pode copiar a nova pasta DockerRosGemini para cá e iniciar."
+# 5
