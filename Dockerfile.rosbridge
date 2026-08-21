@@ -1,21 +1,19 @@
-FROM ros:humble-ros-base
+# syntax=docker/dockerfile:1
+
+# Padrão 3: Utilizando a base ros-core ao invés de ros-base para reduzir peso inicial
+FROM ros:humble-ros-core
 
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
-COPY vendor/apt-ros /tmp/apt-ros
-
-# Configurar APT para usar o repositório local e instalar as dependências
-RUN mv /etc/apt/sources.list.d /etc/apt/offline-backup-d && \
-    mkdir -p /etc/apt/sources.list.d && \
-    mv /etc/apt/sources.list /etc/apt/sources.list.bak 2>/dev/null || true && \
-    echo "deb [trusted=yes] file:/tmp/apt-ros ./" > /etc/apt/sources.list && \
-    apt-get clean && apt-get update && \
-    apt-get install -y ros-humble-rosbridge-suite ros-humble-rmw-cyclonedds-cpp && \
-    rm /etc/apt/sources.list && \
-    mv /etc/apt/sources.list.bak /etc/apt/sources.list 2>/dev/null || true && \
-    rm -rf /etc/apt/sources.list.d && \
-    mv /etc/apt/offline-backup-d /etc/apt/sources.list.d && \
-    rm -rf /tmp/apt-ros
+# Padrão 4: Download oficial da internet, mas protegido por cache mount persistente.
+# Substitui totalmente a necessidade do seu antigo apt-ros offline.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ros-humble-rosbridge-suite \
+    ros-humble-rmw-cyclonedds-cpp && \
+    rm -rf /var/lib/apt/lists/*
 
 CMD ["/bin/bash", "-c", "source /opt/ros/humble/setup.bash && ros2 launch rosbridge_server rosbridge_websocket_launch.xml"]
