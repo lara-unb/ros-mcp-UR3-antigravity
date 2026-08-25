@@ -24,10 +24,6 @@ ros2 launch ur_robot_driver ur_control.launch.py \
 # Como instalar o Antigravity:
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 
-# Montar docker no diretório DockerRosAgy:
-docker load -i vendor/images/ubuntu_22.04.tar
-docker load -i vendor/images/ros_humble.tar
-
 # Criar docker:
 docker compose up --build -d
 
