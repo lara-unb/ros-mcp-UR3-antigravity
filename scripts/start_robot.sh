@@ -11,11 +11,20 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 echo "📂 Diretório de trabalho ajustado para: $PROJECT_ROOT"
 cd "$PROJECT_ROOT" || exit 1
 
+# "newgrp docker" sozinho não afeta os comandos seguintes de um script:
+# ele abre um subshell à parte e, como ninguém interage com ele aqui, retorna
+# na hora sem repassar a permissão. Por isso reexecutamos o próprio script
+# já dentro do grupo "docker" (equivalente não interativo do newgrp).
+if ! groups | grep -qw docker; then
+    echo "🔑 Ativando o grupo 'docker' para esta sessão (reexecutando o script)..."
+    exec sg docker "$0 $*"
+fi
+
 echo "🤖 Preparando o ecossistema UR3..."
 
 # 2. Iniciar o driver do UR3 em um NOVO TERMINAL
 echo "📡 Lançando o driver ROS2 em uma nova janela..."
-gnome-terminal -- bash -ic "ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur3 robot_ip:=192.168.1.102 launch_rviz:=true; exec bash"
+gnome-terminal -- bash -ic "source /opt/ros/humble/setup.bash && ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur3 robot_ip:=192.168.1.102 launch_rviz:=true; exec bash"
 
 echo "⏳ Aguardando 5 segundos para estabilização do ROS2..."
 sleep 5
