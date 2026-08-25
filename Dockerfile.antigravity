@@ -48,10 +48,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Mantive a cópia do seu binário agy, caso ele não seja pesado. 
-# Se ele for instalável online depois, você pode substituir por um RUN wget.
-COPY vendor/bin/agy /usr/local/bin/agy
-RUN chmod +x /usr/local/bin/agy
+# Instala o binário do Antigravity CLI (agy) diretamente da internet,
+# evitando a dependência de um arquivo local em vendor/bin/agy.
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin && \
+    chmod +x /usr/local/bin/agy
 
 # Copia o restante do repositório por último (isso muda muito, então fica no final)
 COPY . /app/
