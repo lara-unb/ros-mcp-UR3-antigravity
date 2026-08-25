@@ -1,4 +1,3 @@
-vendor/
 *.tar
 *.deb
 *.whl
