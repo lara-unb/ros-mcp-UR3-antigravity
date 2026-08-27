@@ -16,7 +16,6 @@ docker rmi dockerrosgemini-gemini-mcp dockerrosgemini-rosbridge 2>/dev/null || t
 # 4. Limpar arquivos locais temporários (caso existam de tentativas antigas)
 echo "📁 Limpando pastas temporárias locais..."
 rm -rf vendor/
-rm -rf gemini-cli/node_modules
 rm -rf ros-mcp-server/.venv
 
 echo "✅ Limpeza concluída!"

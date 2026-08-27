@@ -55,8 +55,8 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr
 
 # Copia o restante do repositório por último (isso muda muito, então fica no final)
 COPY . /app/
-RUN chmod +x scripts/entrypoint.sh
+RUN chmod +x shell/entrypoint.sh
 
 EXPOSE 9090
 
-ENTRYPOINT ["/app/scripts/entrypoint.sh"]
+ENTRYPOINT ["/app/shell/entrypoint.sh"]

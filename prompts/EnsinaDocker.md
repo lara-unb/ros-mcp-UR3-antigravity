@@ -27,3 +27,28 @@ Crucial: Ao iniciar qualquer cálculo de movimento (incluindo o retorno para Hom
 5. Telemetria e Validação de Conexão (Watchdog):
 Ao gravar logs de telemetria lendo o tópico /joint_states, grave exclusivamente os dados provenientes do robô físico no diretório /app. Para diferenciar a origem, grave apenas dados onde sec > 1000000000 (Unix Epoch), descartando os da simulação. 
 Segurança de Hardware: Se, antes de enviar uma trajetória ou durante a telemetria, nenhuma mensagem com timestamp Unix for detectada em uma janela de 5 segundos, deduza que a conexão física com o robô UR3 caiu. Nesse caso, aborte a execução imediatamente e notifique o usuário.
+
+6. Modularidade e Arquitetura de Código (Separação de Responsabilidades):
+Nunca crie scripts monolíticos. Todo o código relacionado à segurança, watchdog, regras de comunicação (WebSockets) e cinemática estrutural deve ser mantido em um módulo central importável (ex: ur3_controller.py). Quando o usuário solicitar uma nova tarefa, trajetória ou missão específica, você deve gerar um script separado que atue como cliente, importando a classe do controlador e executando os comandos a partir dele.
+
+7. Organização dos Scripts no Container:
+O projeto é montado no container em /app. Os scripts de controle dos robôs ficam em /app/scripts/robots/ e devem ser organizados por robô e ambiente:
+
+/app/scripts/robots/ur3/real/         # movimentos para o UR3 físico
+/app/scripts/robots/ur3/ursim/        # movimentos para URSim
+/app/scripts/robots/ur3/coppeliasim/  # movimentos para CoppeliaSim
+/app/scripts/robots/ur3/shared/       # controlador, segurança, cinemática e utilitários comuns
+
+Antes de criar um script, verifique primeiro se já existe uma implementação reutilizável nessas pastas. Não duplique regras de comunicação, watchdog, telemetria, S-Curve ou cinemática em scripts de tarefas.
+
+O módulo central reutilizável do UR3 deve ser criado em /app/scripts/robots/ur3/shared/, por exemplo /app/scripts/robots/ur3/shared/ur3_controller.py. Scripts de tarefas devem ficar na pasta do ambiente correspondente e importar esse módulo compartilhado. Use nomes descritivos, como draw_l.py, draw_circle.py ou move_home.py.
+
+Quando o usuário pedir uma nova tarefa, salve o arquivo no ambiente correto:
+- hardware físico: /app/scripts/robots/ur3/real/
+- URSim: /app/scripts/robots/ur3/ursim/
+- CoppeliaSim: /app/scripts/robots/ur3/coppeliasim/
+- lógica realmente compartilhada: /app/scripts/robots/ur3/shared/
+
+Os arquivos em /app/shell/ são exclusivamente scripts operacionais do projeto, como entrypoint.sh, start_robot.sh e uninstall.sh. Não coloque scripts Python de movimento nessa pasta e não altere esses scripts para implementar tarefas do robô.
+
+Ao criar ou modificar arquivos, preserve os scripts já existentes e confirme o caminho completo do arquivo no resumo da operação. Scripts novos devem ser executáveis diretamente de dentro do container usando Python 3 e a conexão ws://localhost:9090.

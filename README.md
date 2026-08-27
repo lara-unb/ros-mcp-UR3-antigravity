@@ -1,13 +1,14 @@
-# DockerRosGemini
+# DockerRosAntigravity
 
-Este projeto integra o **Antigravity CLI** (`agy`) com o **ROS MCP Server** para controlar e monitorar robôs ROS 2, incluindo o UR3 e o URSim. Os serviços são executados em containers Docker e o build atual baixa as dependências diretamente da internet.
+Este projeto integra o **Antigravity CLI** (`agy`) com o **ROS MCP Server** para controlar e monitorar robôs ROS 2, incluindo o UR3 e o URSim. O projeto base está disponível no repositório [robotmcp/ros-mcp-server](https://github.com/robotmcp/ros-mcp-server); este repositório adapta essa integração para o ambiente Docker, o UR3 e o CoppeliaSim. Os serviços são executados em containers Docker e o build atual baixa as dependências diretamente da internet.
 
 ## Pré-requisitos
 
 - Docker Engine instalado e em execução.
 - Docker Compose v2, disponível pelo comando `docker compose`.
 - Acesso à internet durante o build das imagens.
-- Uma chave da API Gemini.
+- Um projeto Google Cloud configurado para usar os serviços necessários do Antigravity.
+- Uma conta Google autenticada no Antigravity CLI (`agy`), conforme o fluxo de login do próprio CLI.
 
 O host de referência é Ubuntu 22.04. O Dockerfile do Antigravity instala Python, Node.js 20 e o servidor ROS MCP; o Dockerfile do ROSbridge usa a imagem `ros:humble-ros-core` e instala o `rosbridge_suite` e o suporte ao CycloneDDS.
 
@@ -15,13 +16,15 @@ O host de referência é Ubuntu 22.04. O Dockerfile do Antigravity instala Pytho
 
 Execute os comandos a partir da raiz deste repositório:
 
-### 1. Configurar o ambiente
+### 1. Configurar o ambiente e o projeto Cloud
 
 ```bash
 cp .env.example .env
 ```
 
-Edite `.env` e substitua `your_api_key_here` pela sua `GEMINI_API_KEY`.
+Edite `.env` e informe o ID do seu projeto Google Cloud em `GOOGLE_CLOUD_PROJECT`.
+Não coloque chaves de API ou outros segredos nesse arquivo. A autenticação deve
+ser feita pelo fluxo de login do Antigravity CLI antes de usar o container.
 
 ### 2. Construir e iniciar os serviços
 
@@ -76,9 +79,13 @@ O URSim e o driver do UR3 precisam estar em execução e acessíveis pela rede d
 Para iniciar o fluxo do UR3 real, use o script incluído:
 
 ```bash
-chmod +x scripts/start_robot.sh
-./scripts/start_robot.sh
+chmod +x shell/start_robot.sh
+./shell/start_robot.sh
 ```
+
+Os scripts de operação do ambiente ficam em `shell/`. Os scripts de controle dos
+robôs devem ser organizados em `scripts/robots/<robô>/<ambiente>/`, por exemplo
+em `scripts/robots/ur3/real/` ou `scripts/robots/ur3/coppeliasim/`.
 
 Esse script abre o driver ROS 2 em uma nova janela, inicia o Compose, conecta ao `antigravity-mcp` e encerra os serviços ao sair.
 
