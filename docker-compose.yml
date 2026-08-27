@@ -4,8 +4,12 @@ services:
       context: .
       dockerfile: Dockerfile.antigravity
     container_name: antigravity-mcp
-    networks:
-      - robotic-net
+    # host mode: DDS discovery/traffic from the host's native ROS2 driver does not
+    # traverse a docker bridge network, so this container must share the host netns.
+    network_mode: "host"
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
     env_file:
       - .env
     stdin_open: true
@@ -19,19 +23,11 @@ services:
       context: .
       dockerfile: Dockerfile.rosbridge
     container_name: rosbridge
-    networks:
-      - robotic-net
+    network_mode: "host"
     environment:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-    # A porta agora é explicitamente mapeada do container para a máquina hospedeira
-    ports:
-      - "9090:9090"
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
     restart: unless-stopped
-
-# Definição de rede própria (bridge) para isolar o ecossistema do seu projeto
-networks:
-  robotic-net:
-    driver: bridge
 
 volumes:
   antigravity-config:
