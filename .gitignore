@@ -2,3 +2,11 @@
 *.deb
 *.whl
 ur3_driver.log
+
+# Arquivos de ambiente podem conter credenciais e outros dados sensíveis.
+.env
+
+# Mantenha o modelo sem segredos versionado para orientar novas configurações.
+# .env.example
+# .env.local
+# .env.*.local

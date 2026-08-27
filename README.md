@@ -26,6 +26,12 @@ Edite `.env` e informe o ID do seu projeto Google Cloud em `GOOGLE_CLOUD_PROJECT
 Não coloque chaves de API ou outros segredos nesse arquivo. A autenticação deve
 ser feita pelo fluxo de login do Antigravity CLI antes de usar o container.
 
+O arquivo `.env` está listado no `.gitignore` porque pode conter informações
+sensíveis. O arquivo `.env.example` deve permanecer sem credenciais e pode ser
+versionado como modelo. Se algum valor sensível precisar ser incluído em um
+arquivo adicional de ambiente, adicione o padrão correspondente ao `.gitignore`;
+as linhas de exemplo comentadas já estão disponíveis nesse arquivo.
+
 ### 2. Construir e iniciar os serviços
 
 ```bash
