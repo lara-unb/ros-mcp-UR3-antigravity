@@ -1,3 +1,5 @@
 .git
 gemini-cli/node_modules
 ros-mcp-server/.venv
+# stale artifact, never a live log — must not be baked into the image
+ur3_driver.log

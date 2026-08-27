@@ -3,13 +3,18 @@
 Olá! Nós estamos controlando um braço robótico UR3 físico e uma simulação no CoppeliaSim simultaneamente via ROS2. Para que você não perca tempo investigando, aqui estão as regras de arquitetura e os desafios de segurança que já superamos. Siga essas diretrizes estritamente em todos os seus scripts:
 
 **1. Arquitetura de Rede (O Contêiner Isolado):**
-Você está rodando dentro de um contêiner Docker isolado (`antigravity-mcp`) sem acesso a comandos nativos do ROS2 (`rclpy`, `colcon`). O ROS2 está exposto no host via **`rosbridge_server`**. 
+Você está rodando dentro de um contêiner Docker isolado (`antigravity-mcp`) sem acesso a comandos nativos do ROS2 (`rclpy`, `colcon`). O ROS2 está exposto no host via **`rosbridge_server`**, e ambos os contêineres rodam em `network_mode: host` (obrigatório para o discovery DDS do driver nativo do host alcançar o `rosbridge`; sem isso, `ws://localhost:9090` nem conecta).
 *Regra:* TODOS os seus scripts devem ser feitos em **Python puro**, usando a biblioteca `websockets`. Conecte-se em `ws://localhost:9090`. Para mover o robô, você deve publicar no tópico `/scaled_joint_trajectory_controller/joint_trajectory` seguindo o fluxo obrigatório do rosbridge: `"op": "advertise"`, aguardar 0.5s, enviar `"op": "publish"`, aguardar 1.0s, e enviar `"op": "unadvertise"`.
+
+**1.1. Checagem Obrigatória Antes de Qualquer Movimento (NUNCA pule esta etapa):**
+Antes de publicar qualquer trajetória, o script DEVE se inscrever em `/joint_states` e aguardar pelo menos uma mensagem, com timeout curto (ex: 3s). Isso serve para dois propósitos: (a) confirmar que a conexão websocket realmente alcança o grafo ROS2 do host, e (b) obter os valores atuais das 6 juntas para preencher as posições das juntas que NÃO estão sendo movidas (nunca publique zeros ou valores chutados para as demais juntas).
+*Regra de falha explícita:* Se o timeout de `/joint_states` estourar, NÃO prossiga silenciosamente para o publish. Aborte e reporte ao usuário exatamente isso: "não recebi `/joint_states` do rosbridge — o driver ROS2 do host provavelmente não está sendo descoberto (verifique `network_mode: host` e `ROS_DOMAIN_ID`)". Da mesma forma, se o robô não se mover após o publish, isso NÃO significa necessariamente falha de mensagem — confira se o Teach Pendant está em modo **Remote Control** com o programa **External Control** rodando (sem isso o controlador ignora todos os comandos do ROS2 mesmo que a mensagem esteja perfeita).
 
 **2. O Conflito de Hardware e a Regra do "Relógio ZERO":**
 Inicialmente o robô simulado se movia, mas o físico descartava silenciosamente as nossas trajetórias. Descobrimos que isso ocorria por conflito de relógios de hardware (Unix Epoch da placa-mãe do UR3) com os relógios de software na rede ROS2.
 *Regra:* O campo de timestamp no cabeçalho das mensagens publicadas deve SEMPRE ser forçado a **ZERO**. 
 Envie exatamente assim na raiz da mensagem JSON: `"header": { "stamp": { "sec": 0, "nanosec": 0 } }`. Isso é um bypass no ROS2 chamado "Execução Imediata", forçando a controladora de metal a assumir o seu próprio tempo interno, sincronizando a simulação e o hardware instantaneamente.
+*Nota de precisão técnica:* a explicação de "conflito de relógio de hardware" acima é uma simplificação herdada de uma sessão anterior. O motivo real e verificado é mais simples: `header.stamp = 0` é a convenção padrão do `joint_trajectory_controller` do ROS2 para "iniciar a execução imediatamente" — não é um bypass exótico. Continue usando `stamp = 0`, apenas não invente novas explicações de causa em cima desta regra.
 
 **3. Segurança e o Modo 'Reduced':**
 O hardware físico do UR3 está operando sob regras rígidas do Modo 'Reduced'. Ele abortará e travará se você enviar movimentos bruscos.
