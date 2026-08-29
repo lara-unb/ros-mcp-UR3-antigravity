@@ -1,22 +1,17 @@
 services:
-  antigravity-mcp:
+  ros-mcp-server:
     build:
       context: .
-      dockerfile: Dockerfile.antigravity
-    container_name: antigravity-mcp
-    # host mode: DDS discovery/traffic from the host's native ROS2 driver does not
-    # traverse a docker bridge network, so this container must share the host netns.
+      dockerfile: Dockerfile.ros-mcp-server
+    container_name: ros-mcp-server
     network_mode: "host"
     environment:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
-    env_file:
-      - .env
-    stdin_open: true
-    tty: true
+    restart: unless-stopped
     volumes:
-      - ./ros-mcp-server/robot_specifications:/app/ros-mcp-server/robot_specifications
-      - antigravity-config:/root/.gemini
+      # Caminho depende da versão do Python da imagem base (ubuntu:22.04 -> python3.10).
+      - ./ros-mcp-server/robot_specifications:/opt/venv/lib/python3.10/site-packages/robot_specifications
 
   rosbridge:
     build:
@@ -28,6 +23,3 @@ services:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
     restart: unless-stopped
-
-volumes:
-  antigravity-config:

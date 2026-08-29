@@ -1,86 +1,107 @@
 # DockerRosAntigravity
 
-Este projeto integra o **Antigravity CLI** (`agy`) com o **ROS MCP Server** para controlar e monitorar robôs ROS 2, incluindo o UR3 e o URSim. O projeto base está disponível no repositório [robotmcp/ros-mcp-server](https://github.com/robotmcp/ros-mcp-server); este repositório adapta essa integração para o ambiente Docker, o UR3 e o CoppeliaSim. Os serviços são executados em containers Docker e o build atual baixa as dependências diretamente da internet.
+Este projeto integra o **Antigravity CLI** (`agy`) com o **ROS MCP Server** para controlar e monitorar robôs ROS 2, incluindo o UR3 e o URSim. O projeto base está disponível no repositório [robotmcp/ros-mcp-server](https://github.com/robotmcp/ros-mcp-server); este repositório adapta essa integração para o UR3 e o CoppeliaSim.
+
+A infraestrutura ROS (`rosbridge` e `ros-mcp-server`) roda em containers Docker. O **Antigravity CLI (`agy`) roda diretamente no host**, fora do docker, ele se conecta ao `ros-mcp-server` por HTTP, como qualquer outro cliente de rede. Desta forma, também é possível utilizar outros agentes para comunicar com o ros-mcp-server.
+
+## Arquitetura
+
+```
+Host (Ubuntu 22.04)
+├── agy (Antigravity CLI)            ──HTTP (MCP)──►  container ros-mcp-server:9000
+├── driver ur_robot_driver / URSim   ──ROS2/DDS ──►  container rosbridge:9090
+└── scripts/robots/... (ex: ur3_controller.py) ──WebSocket──►  container rosbridge:9090
+```
 
 ## Pré-requisitos
 
 - Docker Engine instalado e em execução.
 - Docker Compose v2, disponível pelo comando `docker compose`.
 - Acesso à internet durante o build das imagens.
-- Um projeto Google Cloud configurado para usar os serviços necessários do Antigravity.
-- Uma conta Google autenticada no Antigravity CLI (`agy`), conforme o fluxo de login do próprio CLI.
+- (opcional)**Antigravity CLI instalado**:
+  ```bash
+  curl -fsSL https://antigravity.google/cli/install.sh | bash
+  ```
+- (opcional)Um projeto Google Cloud configurado para uso dos serviços do Antigravity, e uma conta Google autenticada no `agy` (fluxo de login do próprio CLI, executado no host).
 
-O host de referência é Ubuntu 22.04. O Dockerfile do Antigravity instala Python, Node.js 20 e o servidor ROS MCP; o Dockerfile do ROSbridge usa a imagem `ros:humble-ros-core` e instala o `rosbridge_suite` e o suporte ao CycloneDDS.
+O host de referência é Ubuntu 22.04. O Dockerfile do `ros-mcp-server` instala apenas Python e o servidor MCP; o Dockerfile do ROSbridge usa a imagem `ros:humble-ros-core` e instala o `rosbridge_suite` e o suporte ao CycloneDDS.
 
 ## Instalação e execução
 
 Execute os comandos a partir da raiz deste repositório:
 
-### 1. Configurar o ambiente e o projeto Cloud
+### 1. Configurar o ambiente
 
 ```bash
 cp .env.example .env
 ```
 
-Edite `.env` e informe o ID do seu projeto Google Cloud em `GOOGLE_CLOUD_PROJECT`.
-Não coloque chaves de API ou outros segredos nesse arquivo. A autenticação deve
-ser feita pelo fluxo de login do Antigravity CLI antes de usar o container.
+`.env` guarda os valores locais de configuração:
+- `ROS_DOMAIN_ID` — lido pelos containers via `docker-compose.yml`, deve bater
+  com o `ROS_DOMAIN_ID` exportado pelo driver ROS2 nativo do host.
+- `GOOGLE_CLOUD_PROJECT` — opcional, usado apenas como referência para configurar
+  o `agy` no host; os containers não leem essa variável.
 
 O arquivo `.env` está listado no `.gitignore` porque pode conter informações
 sensíveis. O arquivo `.env.example` deve permanecer sem credenciais e pode ser
-versionado como modelo. Se algum valor sensível precisar ser incluído em um
-arquivo adicional de ambiente, adicione o padrão correspondente ao `.gitignore`;
-as linhas de exemplo comentadas já estão disponíveis nesse arquivo.
+versionado como modelo.
 
-### 2. Construir e iniciar os serviços
+### 2. Construir e iniciar os serviços de infraestrutura
 
 ```bash
 docker compose up --build -d
 ```
 
-Esse comando constrói as imagens `Dockerfile.antigravity` e `Dockerfile.rosbridge` e inicia os containers `antigravity-mcp` e `rosbridge`. O primeiro build pode demorar porque instala as dependências online. Os builds seguintes aproveitam o cache do Docker e do `uv`.
+Esse comando constrói as imagens `Dockerfile.ros-mcp-server` e `Dockerfile.rosbridge` e inicia os containers `ros-mcp-server` e `rosbridge`. O primeiro build pode demorar porque instala as dependências online. Os builds seguintes aproveitam o cache do Docker e do `uv`.
 
 ### 3. Verificar o estado dos serviços
 
 ```bash
 docker compose ps
 docker compose logs -f rosbridge
+docker compose logs -f ros-mcp-server
 ```
 
-O ROSbridge publica a porta `9090` do container na porta `9090` do host. Para parar e remover os containers, mantendo o volume de configuração do Antigravity:
+Ambos os serviços ficam ativos sozinhos (`restart: unless-stopped`), sem precisar de interação manual — o `rosbridge` escuta WebSocket na porta `9090` e o `ros-mcp-server` escuta MCP via HTTP na porta `9000`.
+
+Para parar e remover os containers:
 
 ```bash
 docker compose down
 ```
 
-Para remover também o volume persistente `antigravity-config`, use `docker compose down -v`.
+## Configurar o Antigravity (host) para usar o `ros-mcp-server`
 
-## Usar o Antigravity
+Como o `ros-mcp-server` expõe o transporte `streamable-http`, configure o cliente MCP do `agy` para apontar para a URL do serviço em vez de lançá-lo como subprocesso. Um exemplo de configuração está em [`ros-mcp-server/config/mcp.json`](ros-mcp-server/config/mcp.json), entrada `ros-mcp-server-http`:
 
-O container `antigravity-mcp` permanece ativo em modo interativo ocioso. Execute o CLI com `agy` dentro dele:
-
-```bash
-docker exec -it antigravity-mcp agy
+```json
+{
+  "mcpServers": {
+    "ros-mcp-server": {
+      "name": "ROS-MCP Server (http)",
+      "transport": "http",
+      "url": "http://127.0.0.1:9000/mcp"
+    }
+  }
+}
 ```
 
-Também é possível enviar uma instrução diretamente:
+Adicione essa entrada às configurações do Antigravity CLI no host (`~/.gemini/settings.json` ou equivalente). Depois disso, basta rodar `agy` normalmente no host:
 
 ```bash
-docker exec -it antigravity-mcp agy "Verifique o estado do robô no URSim"
+agy
+# ou
+agy "Verifique o estado do robô no URSim"
 ```
-
-O entrypoint cria automaticamente `/root/.gemini/settings.json` e registra o servidor `ros-mcp-server`. A configuração é persistida no volume Docker `antigravity-config`.
 
 ## Conexão com ROSbridge e URSim
 
-Os dois serviços participam da rede Docker `robotic-net`. De dentro da rede Compose, o hostname do ROSbridge é `rosbridge` e a porta é `9090`. Clientes executados no host acessam o serviço por `127.0.0.1:9090`, graças ao mapeamento de porta.
+Como `ros-mcp-server` e `rosbridge` usam `network_mode: host`, tanto os containers quanto os processos do host (`agy`, driver do UR3, scripts em `scripts/robots/`) acessam os dois serviços por `127.0.0.1`:
 
-Ao usar as ferramentas de conexão do MCP, informe o endereço conforme o local do cliente:
+- ROSbridge (WebSocket): `127.0.0.1:9090`
+- ros-mcp-server (MCP HTTP): `127.0.0.1:9000/mcp`
 
-- MCP ou cliente executado dentro da rede Compose: `rosbridge:9090`.
-- Cliente executado no host: `127.0.0.1:9090`.
-
-O URSim e o driver do UR3 precisam estar em execução e acessíveis pela rede do host. A configuração de cada robô fica em `ros-mcp-server/robot_specifications`; esse diretório é montado no container para permitir alterações sem reconstruir a imagem.
+O URSim e o driver do UR3 precisam estar em execução e acessíveis pela rede do host. A configuração de cada robô fica em `ros-mcp-server/robot_specifications`; esse diretório é montado no container do `ros-mcp-server` para permitir alterações sem reconstruir a imagem.
 
 Para iniciar o fluxo do UR3 real, use o script incluído:
 
@@ -93,15 +114,15 @@ Os scripts de operação do ambiente ficam em `shell/`. Os scripts de controle d
 robôs devem ser organizados em `scripts/robots/<robô>/<ambiente>/`, por exemplo
 em `scripts/robots/ur3/real/` ou `scripts/robots/ur3/coppeliasim/`.
 
-Esse script abre o driver ROS 2 em uma nova janela, inicia o Compose, conecta ao `antigravity-mcp` e encerra os serviços ao sair.
+Esse script abre o driver ROS 2 em uma nova janela, inicia o Compose (rosbridge + ros-mcp-server) e roda o `agy` diretamente no host, encerrando os serviços Docker ao sair.
 
 ## Diagnóstico rápido
 
 ```bash
 docker compose ps
-docker compose logs antigravity-mcp
+docker compose logs ros-mcp-server
 docker compose logs rosbridge
-docker exec -it antigravity-mcp bash
+docker exec -it ros-mcp-server bash
 ```
 
-Se a porta `9090` já estiver ocupada, altere o lado esquerdo do mapeamento `9090:9090` em `docker-compose.yml` e use a nova porta ao conectar a partir do host. A porta interna do ROSbridge continua sendo `9090`.
+Se a porta `9090` ou `9000` já estiver ocupada, altere o mapeamento correspondente em `docker-compose.yml`/`Dockerfile.ros-mcp-server` e ajuste a URL usada pelo `agy` no host.

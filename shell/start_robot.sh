@@ -29,14 +29,14 @@ gnome-terminal -- bash -ic "source /opt/ros/humble/setup.bash && ros2 launch ur_
 echo "⏳ Aguardando 5 segundos para estabilização do ROS2..."
 sleep 5
 
-# 3. Levantar a infraestrutura Docker (Antigravity + Rosbridge)
+# 3. Levantar a infraestrutura Docker (ros-mcp-server + Rosbridge)
 echo "🛡️ Verificando segurança e conflitos de contêiner..."
 
-if docker ps -a --format '{{.Names}}' | grep -Eq "^antigravity-mcp$"; then
-    BACKUP_NAME="antigravity-mcp_bkp_$(date +%Y%m%d_%H%M%S)"
-    echo "⚠️ ATENÇÃO: Um contêiner 'antigravity-mcp' preexistente foi encontrado!"
+if docker ps -a --format '{{.Names}}' | grep -Eq "^ros-mcp-server$"; then
+    BACKUP_NAME="ros-mcp-server_bkp_$(date +%Y%m%d_%H%M%S)"
+    echo "⚠️ ATENÇÃO: Um contêiner 'ros-mcp-server' preexistente foi encontrado!"
     echo "📦 Renomeando para '$BACKUP_NAME' para evitar perda de dados..."
-    docker rename antigravity-mcp "$BACKUP_NAME"
+    docker rename ros-mcp-server "$BACKUP_NAME"
 fi
 
 if docker ps -a --format '{{.Names}}' | grep -Eq "^rosbridge$"; then
@@ -44,17 +44,17 @@ if docker ps -a --format '{{.Names}}' | grep -Eq "^rosbridge$"; then
     docker rename rosbridge "$BACKUP_NAME"
 fi
 
-echo "🐳 Subindo os serviços do Docker Compose..."
+echo "🐳 Subindo os serviços do Docker Compose (ros-mcp-server + rosbridge)..."
 docker compose up -d
 
 echo "⏳ Aguardando 3 segundos para os contêineres inicializarem..."
 sleep 3
 
-# 4. Entrar na interface interativa do Antigravity
-echo "🧠 Conectando ao Agente Autônomo..."
+# 4. Rodar o Antigravity diretamente no host (agy não está mais em container)
+echo "🧠 Conectando ao Agente Autônomo (host)..."
 echo "--------------------------------------------------------"
 
-docker exec -it antigravity-mcp agy 
+agy
 
 echo "--------------------------------------------------------"
 
