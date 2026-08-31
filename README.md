@@ -126,3 +126,48 @@ docker exec -it ros-mcp-server bash
 ```
 
 Se a porta `9090` ou `9000` já estiver ocupada, altere o mapeamento correspondente em `docker-compose.yml`/`Dockerfile.ros-mcp-server` e ajuste a URL usada pelo `agy` no host.
+
+## Como criar o agente customizado agy:
+
+Crie um arquivo "ur3agent.md" no diretório .gemini/config/agents, para criar o agente globalmente. Exemplo de template de agente customizado:
+```
+---
+name: nome-do-agente
+description: Breve descrição da utilidade deste agente.
+model: flash 
+mainAgent: false
+temperature: 0.2
+tools:
+  - run_command
+  - read_file
+  - write_file
+---
+# Core Instructions
+
+Prompt Inicial (a exemplo do `prompts/EnsinaDocker.md`)
+
+# Regras de Operação e Comportamento
+
+1. **Formato de Resposta:** Responda de forma direta e concisa. Evite introduções longas.
+2. **Restrições:** Nunca faça X. Sempre priorize Y.
+3. **Escopo:** Se a solicitação do usuário estiver fora do seu escopo, avise imediatamente e não tente adivinhar.
+
+# Protocolo de Inicialização
+
+Ao iniciar esta sessão, siga EXATAMENTE estes passos de forma silenciosa:
+1. Execute `pwd` para identificar a raiz do projeto.
+2. Leia o arquivo X (se aplicável ao contexto) para entender o estado inicial.
+3. Apresente um painel de status curto confirmando que você carregou o ambiente com sucesso e está pronto.
+4. Outras instruções de BOOT.
+```
+
+
+Neste projeto, `prompts/ur3agent.md` é o agente customizado utilizado.
+Para iniciar, utilize o CLI:
+
+```bash
+agy --agent ur3-lab-agent
+```
+
+Perceba que no CLI, é utilizado o "name: " da descrição do agente, não o nome do arquivo "ur3agent.md".
+Para mais informações, visite o site de [Subagentes](https://antigravity.google/docs/cli/subagents/).

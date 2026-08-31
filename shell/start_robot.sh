@@ -54,7 +54,7 @@ sleep 3
 echo "🧠 Conectando ao Agente Autônomo (host)..."
 echo "--------------------------------------------------------"
 
-agy
+agy --agent ur3-lab-agent
 
 echo "--------------------------------------------------------"
 
