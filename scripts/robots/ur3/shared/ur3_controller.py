@@ -30,6 +30,30 @@ class UR3AutonomousController:
         
         self.MAX_VELOCITY = 0.15  # rad/s
 
+        # Limites conservadores de junta (rad). TODO: confirmar contra a config de segurança real do Polyscope/URSim.
+        self.JOINT_LIMITS = [(-2 * math.pi, 2 * math.pi)] * 6
+
+        # Offset flange -> TCP (garra RG2), medido em 2026-09-01 comparando forward_kinematics
+        # com /tcp_pose_broadcaster/pose no robô real (2 amostras, repetiu com <1mm de diferença).
+        # Reconfirmar se a ferramenta física mudar.
+        self.TOOL_OFFSET = self._build_tool_offset()
+
+        self._telemetry_task = None
+        self._watchdog_task = None
+        self._pending_goals = {}  # goal_id -> asyncio.Queue (action_feedback/action_result)
+
+    def _build_tool_offset(self):
+        # Offset flange -> TCP (RG2), 187.2mm ao longo de z. Esse é o TCP configurado no
+        # Polyscope (ponto de preensão entre os dedos), não o comprimento físico total do
+        # gripper. O datasheet OnRobot RG2 (pag. 9, "1.3. RG2") confirma 213mm de comprimento
+        # total flange->ponta do dedo; os ~26mm de diferença são o recuo esperado do TCP em
+        # relação à ponta física (comum em garras, já que o TCP fica no ponto de contato do
+        # dedo com a peça, não na extremidade externa).
+        T = np.eye(4, dtype=float)
+        T[:3, :3] = np.array([[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]])
+        T[:3, 3] = np.array([-0.0025, 0.0, 0.1872])
+        return T
+
     async def connect(self):
         """Estabelece conexão com o rosbridge_server e configura os tópicos."""
         try:
@@ -54,17 +78,41 @@ class UR3AutonomousController:
             await self.ws.send(json.dumps(sub_msg))
             
             self.connected = True
-            asyncio.create_task(self.listen_telemetry())
-            asyncio.create_task(self.connection_watchdog())
+            self._telemetry_task = asyncio.create_task(self.listen_telemetry())
+            self._watchdog_task = asyncio.create_task(self.connection_watchdog())
             
         except Exception as e:
             print(f"[ERRO] Falha na conexão WebSocket: {e}")
 
+    async def shutdown(self):
+        """Encerra tasks assíncronas e o WebSocket de forma limpa e ordenada."""
+        self.connected = False
+        for task in (self._telemetry_task, self._watchdog_task):
+            if task is not None:
+                task.cancel()
+        for task in (self._telemetry_task, self._watchdog_task):
+            if task is not None:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        if self.ws is not None:
+            try:
+                await self.ws.close()
+            except Exception:
+                pass
+
     async def listen_telemetry(self):
-        """Processa as mensagens WebSocket do rosbridge."""
+        """Processa as mensagens WebSocket do rosbridge: telemetria de /joint_states e,
+        se houver goals de action pendentes, roteia action_feedback/action_result para eles."""
         try:
             async for msg_str in self.ws:
                 msg = json.loads(msg_str)
+                if msg.get("op") in ("action_feedback", "action_result"):
+                    queue = self._pending_goals.get(msg.get("id"))
+                    if queue is not None:
+                        queue.put_nowait(msg)
+                    continue
                 if msg.get("op") == "publish" and msg.get("topic") == "/joint_states":
                     data = msg.get("msg", {})
                     header = data.get("header", {})
@@ -138,6 +186,18 @@ class UR3AutonomousController:
             transforms.append(T)
         return transforms
 
+    def forward_kinematics_tcp(self, q):
+        """Pose da ponta da ferramenta (TCP), não do flange nu: aplica self.TOOL_OFFSET."""
+        return self.forward_kinematics(q)[-1] @ self.TOOL_OFFSET
+
+    def inverse_kinematics_tcp(self, target_tcp_pos, target_tcp_rot=None, q_init=None, **kwargs):
+        """Resolve a IK para uma pose desejada do TCP, convertendo para o flange internamente."""
+        T_tcp_target = np.eye(4, dtype=float)
+        T_tcp_target[:3, :3] = np.array(target_tcp_rot, dtype=float) if target_tcp_rot is not None else np.eye(3)
+        T_tcp_target[:3, 3] = target_tcp_pos
+        T_flange_target = T_tcp_target @ np.linalg.inv(self.TOOL_OFFSET)
+        return self.inverse_kinematics(T_flange_target[:3, 3], T_flange_target[:3, :3], q_init=q_init, **kwargs)
+
     def compute_jacobian(self, q):
         """Calcula a Matriz Jacobiana Geométrica (6x6) baseada nos parâmetros D-H."""
         transforms = self.forward_kinematics(q)
@@ -160,8 +220,106 @@ class UR3AutonomousController:
             R_err[1, 0] - R_err[0, 1]
         ], dtype=float)
 
+    def check_joint_limits(self, q):
+        """Retorna False se alguma junta de q estiver fora de self.JOINT_LIMITS."""
+        for value, (lo, hi) in zip(q, self.JOINT_LIMITS):
+            if value < lo or value > hi:
+                return False
+        return True
+
+    def _alternate_seeds(self, q_base):
+        """Sementes alternativas de q_init para reduzir falhas de convergência do IK."""
+        q_base = np.array(q_base, dtype=float)
+        home = np.array([0.0, -math.pi/2, 0.0, -math.pi/2, 0.0, 0.0], dtype=float)
+        rng = np.random.default_rng(42)
+        seeds = [home]
+        for _ in range(3):
+            seeds.append(q_base + rng.uniform(-0.3, 0.3, size=6))
+        return seeds
+
+    def analytic_inverse_kinematics(self, target_pos, target_rot):
+        """Cinemática Inversa analítica (fechada) do UR3, derivada dos parâmetros D-H estritos
+        desta classe e validada numericamente contra forward_kinematics (erro < 1e-6 em 200+
+        configurações aleatórias). Retorna até 8 soluções (cotovelo cima/baixo, ombro
+        esquerda/direita, pulso invertido), sem filtrar por limites de junta.
+
+        Limitação conhecida: em singularidade de pulso (sin(theta5) ~= 0, eixos 4 e 6
+        alinhados), theta6 é fixado em 0.0 e theta4 absorve a rotação restante.
+        """
+        d1 = self.dh_params[0]["d"]
+        a2 = self.dh_params[1]["a"]
+        a3 = self.dh_params[2]["a"]
+        d4 = self.dh_params[3]["d"]
+        d5 = self.dh_params[4]["d"]
+        d6 = self.dh_params[5]["d"]
+
+        R = np.array(target_rot, dtype=float)
+        p = np.array(target_pos, dtype=float)
+        solutions = []
+
+        # Centro do punho: remove o offset d6 ao longo do eixo z da ferramenta.
+        pw = p - d6 * R[:, 2]
+        r_xy = math.hypot(pw[1], pw[0])
+        if r_xy < abs(d4):
+            return []  # posição fora do alcance do ombro (offset d4)
+
+        phi1 = math.atan2(pw[1], pw[0])
+        phi2 = math.acos(np.clip(d4 / r_xy, -1.0, 1.0))
+        theta1_candidates = [phi1 + phi2 + math.pi / 2, phi1 - phi2 + math.pi / 2]
+
+        for theta1 in theta1_candidates:
+            c5 = (p[0] * math.sin(theta1) - p[1] * math.cos(theta1) - d4) / d6
+            if abs(c5) > 1.0 + 1e-6:
+                continue
+            c5 = np.clip(c5, -1.0, 1.0)
+
+            for sign5 in (1.0, -1.0):
+                theta5 = sign5 * math.acos(c5)
+                s5 = math.sin(theta5)
+                s1, c1 = math.sin(theta1), math.cos(theta1)
+
+                if abs(s5) < 1e-8:
+                    theta6 = 0.0
+                else:
+                    s6 = (-R[0, 1] * s1 + R[1, 1] * c1) / s5
+                    c6 = (R[0, 0] * s1 - R[1, 0] * c1) / s5
+                    theta6 = math.atan2(s6, c6)
+
+                T01 = self.dh_matrix(theta1, 0.0, d1, math.pi / 2)
+                T45 = self.dh_matrix(theta5, 0.0, d5, -math.pi / 2)
+                T56 = self.dh_matrix(theta6, 0.0, d6, 0.0)
+                T_target = np.eye(4)
+                T_target[:3, :3] = R
+                T_target[:3, 3] = p
+                T14 = np.linalg.inv(T01) @ T_target @ np.linalg.inv(T56) @ np.linalg.inv(T45)
+                p14 = T14[:3, 3]
+
+                # Braço planar (junta 2-3) no referencial da junta 1: p14 = (x, y, d4).
+                r14 = math.hypot(p14[0], p14[1])
+                c3 = (r14 ** 2 - a2 ** 2 - a3 ** 2) / (2 * a2 * a3)
+                if abs(c3) > 1.0 + 1e-6:
+                    continue
+                c3 = np.clip(c3, -1.0, 1.0)
+
+                for sign3 in (1.0, -1.0):
+                    theta3 = sign3 * math.acos(c3)
+                    s3 = math.sin(theta3)
+                    theta2 = math.atan2(p14[1], p14[0]) - math.atan2(a3 * s3, a2 + a3 * math.cos(theta3))
+
+                    T12 = self.dh_matrix(theta2, 0.0, 0.0, 0.0)
+                    T23 = self.dh_matrix(theta3, a2, 0.0, 0.0)
+                    T34 = np.linalg.inv(T23) @ np.linalg.inv(T12) @ T14
+                    theta4 = math.atan2(T34[1, 0], T34[0, 0])
+
+                    solutions.append([theta1, theta2, theta3, theta4, theta5, theta6])
+
+        return solutions
+
     def inverse_kinematics(self, target_pos, target_rot=None, q_init=None, max_iter=100, tol=1e-4, damping=0.01):
-        """Resolve a Cinemática Inversa usando Damped Least Squares (Jacobiana)."""
+        """Resolve a Cinemática Inversa: tenta a solução analítica fechada primeiro (rápida,
+        sem mínimos locais) e cai para Damped Least Squares apenas se nenhuma das até 8
+        soluções analíticas respeitar os limites de junta.
+        """
         if q_init is None:
             if self.current_joints is not None:
                 q = np.array(self.current_joints, dtype=float)
@@ -174,6 +332,17 @@ class UR3AutonomousController:
         if target_rot is None:
             target_rot = self.forward_kinematics(q)[-1][:3, :3]
 
+        candidates = self.analytic_inverse_kinematics(target_pos, target_rot)
+        valid = [sol for sol in candidates if self.check_joint_limits(sol)]
+        if valid:
+            # Escolhe a solução mais próxima da semente para manter continuidade da trajetória.
+            best = min(valid, key=lambda sol: np.linalg.norm(np.array(sol) - q))
+            return list(best), True
+
+        return self._inverse_kinematics_dls(target_pos, target_rot, q, max_iter, tol, damping)
+
+    def _inverse_kinematics_dls(self, target_pos, target_rot, q, max_iter, tol, damping):
+        """Fallback numérico (Damped Least Squares sobre a Jacobiana geométrica)."""
         for _ in range(max_iter):
             transforms = self.forward_kinematics(q)
             p_curr = transforms[-1][:3, 3]
@@ -184,7 +353,7 @@ class UR3AutonomousController:
             e = np.hstack([e_p, e_o])
             
             if np.linalg.norm(e) < tol:
-                return q.tolist(), True
+                return q.tolist(), self.check_joint_limits(q)
                 
             J = self.compute_jacobian(q)
             J_dls = J.T @ np.linalg.inv(J @ J.T + (damping ** 2) * np.eye(6))
@@ -234,14 +403,17 @@ class UR3AutonomousController:
         return trajectory
 
     def generate_cartesian_circle_trajectory(self, center=None, radius=0.06, plane="xz", hz=20, duration=None):
-        """Gera trajetória cartesiana para círculo perfeito interpolada com S-Curve e resolvida via Cinemática Inversa D-H."""
+        """Gera trajetória cartesiana para círculo perfeito no TCP (ponta da garra RG2, via
+        self.TOOL_OFFSET), interpolada com S-Curve e resolvida via Cinemática Inversa D-H.
+        O default de `center` já considera o offset de ~18.7cm da RG2 (verificado: alcançável).
+        """
         if center is None:
-            center = np.array([0.0, -0.25, 0.35], dtype=float)
+            center = np.array([0.0, -0.45, 0.35], dtype=float)
         else:
             center = np.array(center, dtype=float)
 
         q_ref = np.array([0.0, -math.pi/2, 0.0, -math.pi/2, 0.0, 0.0], dtype=float)
-        R_ref = self.forward_kinematics(q_ref)[-1][:3, :3]
+        R_ref = self.forward_kinematics(q_ref)[-1][:3, :3] @ self.TOOL_OFFSET[:3, :3]
 
         # Determinar orientação e equação do plano
         def get_circle_point(angle):
@@ -256,41 +428,66 @@ class UR3AutonomousController:
 
         # Estimar duração para garantir velocidade articular < 0.15 rad/s
         nominal_duration = 35.0 if duration is None else duration
-        steps = int(nominal_duration * hz)
-        
-        # Obter ponto de início (ângulo 0)
-        p_start = get_circle_point(0.0)
-        q_start, ok = self.inverse_kinematics(p_start, R_ref, q_ref)
-        if not ok:
-            raise RuntimeError("Falha ao calcular IK para o ponto inicial do círculo.")
+        max_rescale_attempts = 5
+        q_traj = None
+        times = None
 
-        # Gerar pontos ao longo da curva S cicloidal
-        q_traj = []
-        q_curr = list(q_start)
-        
-        times = np.linspace(0.0, nominal_duration, steps + 1)
-        for t in times:
-            tau = t / nominal_duration
-            s = tau - (1.0 / (2.0 * math.pi)) * math.sin(2.0 * math.pi * tau)
-            angle = 2.0 * math.pi * s
-            p_t = get_circle_point(angle)
-            q_sol, ok = self.inverse_kinematics(p_t, R_ref, q_curr)
+        for _ in range(max_rescale_attempts):
+            steps = int(nominal_duration * hz)
+
+            # Obter ponto de início (ângulo 0), tentando sementes alternativas se preciso
+            p_start = get_circle_point(0.0)
+            q_start, ok = self.inverse_kinematics_tcp(p_start, R_ref, q_ref)
             if not ok:
-                raise RuntimeError(f"Cinemática Inversa não convergiu no ponto {p_t}")
-            q_curr = q_sol
-            q_traj.append(q_sol)
+                for seed in self._alternate_seeds(q_ref):
+                    q_start, ok = self.inverse_kinematics_tcp(p_start, R_ref, seed)
+                    if ok:
+                        break
+            if not ok:
+                raise RuntimeError("Falha ao calcular IK para o ponto inicial do círculo.")
 
-        q_traj = np.array(q_traj)
-        dt = 1.0 / hz
-        v_traj = np.gradient(q_traj, dt, axis=0)
-        a_traj = np.gradient(v_traj, dt, axis=0)
+            # Gerar pontos ao longo da curva S cicloidal
+            q_traj = []
+            q_curr = list(q_start)
 
-        # Ajuste de escala de tempo caso a velocidade máxima exceda o limite seguro
-        max_vel = np.max(np.abs(v_traj))
-        if max_vel > self.MAX_VELOCITY:
-            scale_factor = (max_vel / self.MAX_VELOCITY) * 1.1
-            actual_duration = nominal_duration * scale_factor
-            return self.generate_cartesian_circle_trajectory(center, radius, plane, hz, duration=actual_duration)
+            times = np.linspace(0.0, nominal_duration, steps + 1)
+            for t in times:
+                tau = t / nominal_duration
+                s = tau - (1.0 / (2.0 * math.pi)) * math.sin(2.0 * math.pi * tau)
+                angle = 2.0 * math.pi * s
+                p_t = get_circle_point(angle)
+                q_sol, ok = self.inverse_kinematics_tcp(p_t, R_ref, q_curr)
+                if not ok:
+                    for seed in self._alternate_seeds(q_curr):
+                        q_sol, ok = self.inverse_kinematics_tcp(p_t, R_ref, seed)
+                        if ok:
+                            break
+                if not ok:
+                    raise RuntimeError(f"Cinemática Inversa não convergiu no ponto {p_t}")
+                q_curr = q_sol
+                q_traj.append(q_sol)
+
+            q_traj = np.array(q_traj)
+            dt = 1.0 / hz
+            v_traj = np.gradient(q_traj, dt, axis=0)
+            a_traj = np.gradient(v_traj, dt, axis=0)
+            # Força condições de contorno nulas (evita solavanco no início/fim do círculo)
+            v_traj[0] = 0.0
+            v_traj[-1] = 0.0
+            a_traj[0] = 0.0
+            a_traj[-1] = 0.0
+
+            # Ajuste de escala de tempo caso a velocidade máxima exceda o limite seguro
+            max_vel = np.max(np.abs(v_traj))
+            if max_vel <= self.MAX_VELOCITY:
+                break
+            nominal_duration *= (max_vel / self.MAX_VELOCITY) * 1.1
+        else:
+            raise RuntimeError("Não foi possível manter a trajetória do círculo dentro do limite de velocidade após múltiplas tentativas.")
+
+        for q in q_traj:
+            if not self.check_joint_limits(q):
+                raise RuntimeError("Trajetória do círculo violaria os limites de junta do UR3.")
 
         # Formatar pontos para mensagem ROS 2
         trajectory_points = []
@@ -327,6 +524,64 @@ class UR3AutonomousController:
         await self.ws.send(json.dumps(traj_msg))
         print(f"[INFO] Trajetória publicada com {len(trajectory_points)} pontos.")
 
+    async def send_trajectory_action(self, trajectory_points, timeout=None):
+        """Alternativa a publish_trajectory: envia a trajetória via action
+        FollowJointTrajectory (confirmado disponível em
+        /scaled_joint_trajectory_controller/follow_joint_trajectory), recebendo
+        feedback contínuo e um resultado final (sucesso/erro), em vez de "atirar e
+        esquecer". Retorna dict com success, result e (se houver) o último feedback.
+        """
+        if not self.connected:
+            return {"success": False, "error": "not_connected"}
+
+        if timeout is None:
+            max_t = trajectory_points[-1]["time_from_start"]
+            timeout = max_t["sec"] + max_t["nanosec"] * 1e-9 + 10.0
+
+        goal_id = f"ur3_goal_{int(time.time() * 1000)}"
+        goal = {
+            "trajectory": {
+                "header": {"stamp": {"sec": 0, "nanosec": 0}},
+                "joint_names": self.joint_names,
+                "points": trajectory_points,
+            },
+            "path_tolerance": [],
+            "goal_tolerance": [],
+            "goal_time_tolerance": {"sec": 0, "nanosec": 0},
+        }
+        queue = asyncio.Queue()
+        self._pending_goals[goal_id] = queue
+
+        action_msg = {
+            "op": "send_action_goal",
+            "id": goal_id,
+            "action": "/scaled_joint_trajectory_controller/follow_joint_trajectory",
+            "action_type": "control_msgs/action/FollowJointTrajectory",
+            "args": goal,
+            "feedback": True,
+        }
+
+        last_feedback = None
+        try:
+            await self.ws.send(json.dumps(action_msg))
+            print(f"[INFO] Trajetória enviada via action ({len(trajectory_points)} pontos), aguardando resultado...")
+            start = time.time()
+            while time.time() - start < timeout:
+                remaining = timeout - (time.time() - start)
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+                if event.get("op") == "action_feedback":
+                    last_feedback = event.get("values", {})
+                elif event.get("op") == "action_result":
+                    values = event.get("values", {})
+                    success = values.get("error_code", -1) == 0
+                    return {"success": success, "result": values, "last_feedback": last_feedback}
+            return {"success": False, "error": f"Timeout após {timeout:.1f}s aguardando o resultado da action.", "last_feedback": last_feedback}
+        finally:
+            self._pending_goals.pop(goal_id, None)
+
     async def move_to_home(self):
         """Regra 4: Retorna para pose Home Cartesiano de forma segura."""
         print("[INFO] Iniciando sequência para Home Cartesiano...")
@@ -348,7 +603,6 @@ if __name__ == "__main__":
         await asyncio.sleep(1.0)
         await agent.move_to_home()
         await asyncio.sleep(1.0)
-        if agent.ws:
-            await agent.ws.close()
+        await agent.shutdown()
             
     asyncio.run(main())

@@ -17,8 +17,8 @@ async def main():
     current_joints = await robot.fetch_current_state()
     print(f"[INFO] Juntas atuais lidas com sucesso: {current_joints}")
     
-    # 2. Parâmetros do círculo
-    center = [0.0, -0.25, 0.35]
+    # 2. Parâmetros do círculo (posição da ponta da garra RG2, já considerando o TOOL_OFFSET)
+    center = [0.0, -0.45, 0.35]
     radius = 0.06  # 6 cm de raio (12 cm de diâmetro)
     plane = "xz"
     
