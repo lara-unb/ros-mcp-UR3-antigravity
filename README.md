@@ -127,6 +127,30 @@ docker exec -it ros-mcp-server bash
 
 Se a porta `9090` ou `9000` já estiver ocupada, altere o mapeamento correspondente em `docker-compose.yml`/`Dockerfile.ros-mcp-server` e ajuste a URL usada pelo `agy` no host.
 
+## Configurar o GitHub Copilot Chat (VS Code) para usar o `ros-mcp-server`
+
+Como o `ros-mcp-server` é um servidor MCP padrão, qualquer cliente MCP pode se conectar a ele, inclusive o agente do Copilot Chat no VS Code, seguindo a mesma arquitetura usada pelo `agy`.
+
+1. Suba a infraestrutura normalmente (`docker compose up --build -d`), garantindo que `ros-mcp-server` esteja escutando em `http://127.0.0.1:9000/mcp`.
+2. Crie (ou confira) o arquivo `.vscode/mcp.json` na raiz do repositório, apontando para o mesmo endpoint HTTP usado pelo `agy`:
+   ```json
+   {
+     "servers": {
+       "ros-mcp-server": {
+         "type": "http",
+         "url": "http://127.0.0.1:9000/mcp"
+       }
+     }
+   }
+   ```
+3. No VS Code, abra a paleta de comandos e rode **MCP: List Servers** (ou recarregue a janela) para que o Copilot Chat detecte o servidor e carregue as ferramentas do `ros-mcp-server`.
+4. Peça ao agente para conectar ao robô e explorar tópicos/serviços, do mesmo jeito que seria pedido ao `agy`:
+   ```
+   Conecte ao robô em 127.0.0.1 e liste os tópicos e serviços disponíveis.
+   ```
+
+Assim, o Copilot Chat passa a exercer o mesmo papel do Antigravity: cliente MCP enviando comandos ROS 2 através do `ros-mcp-server` e do `rosbridge` até o UR3 (real ou no CoppeliaSim/URSim).
+
 ## Como criar o agente customizado agy:
 
 Crie um arquivo "ur3agent.md" no diretório .gemini/config/agents, para criar o agente globalmente. Exemplo de template de agente customizado:
