@@ -196,6 +196,26 @@ agy --agent ur3-lab-agent
 Perceba que no CLI, é utilizado o "name: " da descrição do agente, não o nome do arquivo "ur3agent.md".
 Para mais informações, visite o site de [Subagentes](https://antigravity.google/docs/cli/subagents/).
 
+## Como descobrir o IP do computador para colocar no External Control do UR3:
+
+```bash
+ip route get $(ip route | awk '/default/ {print $3}' | head -n1) | grep -oP 'src \K\S+'
+```
+
+ou
+
+```bash
+hostname -I
+```
+
+## Como descobrir o IP do UR3?
+```bash
+ip neigh
+```
+
+```bash
+for ip in $(ip -4 neigh | awk '{print $1}'); do timeout 1 bash -c "</dev/tcp/$ip/30002" 2>/dev/null && echo "O IP do UR3 é: $ip"; done
+```
 ## Resumo do teste de integração (Copilot Chat ↔ ros-mcp-server)
 
 Teste realizado sem UR3/driver instalado, apenas para validar a comunicação MCP:
