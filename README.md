@@ -195,3 +195,20 @@ agy --agent ur3-lab-agent
 
 Perceba que no CLI, é utilizado o "name: " da descrição do agente, não o nome do arquivo "ur3agent.md".
 Para mais informações, visite o site de [Subagentes](https://antigravity.google/docs/cli/subagents/).
+
+## Resumo do teste de integração (Copilot Chat ↔ ros-mcp-server)
+
+Teste realizado sem UR3/driver instalado, apenas para validar a comunicação MCP:
+
+1. **Bug encontrado e corrigido:** `ros-mcp-server/pyproject.toml` tinha `fastmcp>=2.11.3` sem teto de versão. O `uv pip install` resolvia para o `fastmcp 4.0.3`, que removeu o módulo `fastmcp.tools.tool.ToolResult` usado em `ros_mcp/tools/topics.py`, deixando o container em restart-loop (`ModuleNotFoundError`). Corrigido para `fastmcp>=2.11.3,<3` (linha 2.x é a API compatível com o código atual).
+2. **`docker compose up --build -d`** subiu `rosbridge` (porta 9090) e, após o fix, `ros-mcp-server` (porta 9000) normalmente.
+3. **Validação via Copilot Chat como cliente MCP** (usando `.vscode/mcp.json` apontando para `http://127.0.0.1:9000/mcp`):
+   - `connect_to_robot(127.0.0.1:9090)` → porta aberta (o "ping" falha por falta do binário `ping` no container, sem relação com a conexão real).
+   - `get_topics()` → retornou apenas os tópicos internos do ROS2/rosbridge (`/rosout`, `/parameter_events`, `/client_count`, `/connected_clients`), o esperado sem robô conectado.
+   - `get_nodes()` → retornou `/rosapi`, `/rosapi_params`, `/rosbridge_websocket`.
+4. **Conclusão:** o pipeline Copilot Chat → `ros-mcp-server` → `rosbridge` → ROS2 está funcional. Falta apenas conectar o driver do UR3/URSim para ver tópicos/nós do robô.
+
+**Pendências para revisão no laboratório:**
+- Commitar o fix do `pyproject.toml` (ainda estava só no working tree no momento do teste).
+- Decidir se o `.vscode/mcp.json` deve ser versionado no repositório.
+- Repetir o teste de `connect_to_robot`/`get_topics` com o driver do UR3 (ou URSim/CoppeliaSim) ativo para confirmar que os tópicos do robô aparecem.

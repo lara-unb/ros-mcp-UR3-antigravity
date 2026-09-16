@@ -1,0 +1,54 @@
+name: kinect_nite2
+alias: kinect
+type: sensor
+prompts: |
+              The kinect_nite2 is a Kinect v1 (via libfreenect/OpenNI2) skeleton tracker node
+              ("nite2_tracker", from the ros2_nite2_tracker project). It does NOT expose services
+              or actions — only topics and TF. It runs in its own Docker container (separate from
+              this ros-mcp-server/rosbridge stack), sharing the same ROS_DOMAIN_ID and RMW
+              implementation over host networking so its topics are visible through rosbridge.
+
+              Published topics:
+              - `<output_image>` (default "k1_image", `sensor_msgs/msg/Image`): color frame with the
+                skeleton overlay drawn on it.
+              - `/tf` (`tf2_msgs/msg/TFMessage`): one transform per tracked joint per user, broadcast
+                continuously while a user is tracked (no `/tf_static`).
+
+              Skeleton joint frames (TF):
+              - `header.frame_id` is the configured `camera_frame` parameter (default "k1").
+              - `child_frame_id` follows the pattern `<camera_frame>_<joint_name>_<user_id>`,
+                e.g. `k1_right_hand_1`, `k1_left_hand_1`, `k1_torso_1`.
+              - Joint names: head, neck, right_shoulder, left_shoulder, right_elbow, left_elbow,
+                right_hand, left_hand, torso, right_hip, left_hip, right_knee, left_knee,
+                right_foot, left_foot.
+              - Translation is in meters, already relative to `camera_frame` (the Kinect depth
+                sensor). Orientation is a quaternion; NiTE2 only reliably estimates orientation for
+                some joints (e.g. torso, shoulders) — treat orientation on hands/feet as
+                unreliable and prefer translation-only for those.
+              - A joint frame only appears in `/tf` while its tracking confidence is above 0.5;
+                if a user leaves the view or tracking is lost, that joint stops being published
+                (do not assume the frame is always present).
+              - Multiple users can be tracked simultaneously; disambiguate by `user_id` in the
+                frame name.
+
+              How to read a joint position with this MCP server:
+              - There is no dedicated "get_tf" tool. Use `subscribe_once(topic='/tf',
+                msg_type='tf2_msgs/msg/TFMessage')` and filter the returned `transforms` array for
+                the `child_frame_id` you want (e.g. `k1_right_hand_1`). Call it a few times / poll
+                if the desired child_frame_id is not present in a single message, since each `/tf`
+                message may only contain the joints updated in that cycle.
+              - To view the annotated color image, use `subscribe_once` (or the image-specific
+                tools) on the `output_image` topic (default "k1_image").
+
+              Important limitation for robot control:
+              - These joint positions are expressed in the Kinect's own `camera_frame`, NOT in the
+                UR3 base frame. Do NOT feed raw joint translations directly into UR3 motion
+                commands. A camera-to-robot extrinsic calibration (a static transform from
+                `camera_frame` to the UR3 base frame, e.g. via a static_transform_publisher or a
+                hand-eye calibration) must exist first. Once that transform exists, look up the
+                joint position via a TF listener node (not through this MCP server) and convert it
+                into the UR3 base frame before calling UR3 motion tools.
+              - There is currently no generic "object detection" here — NiTE2 only tracks human
+                skeleton joints. Treat a joint (e.g. `right_hand`/`left_hand`) as a proxy target
+                position; true arbitrary object detection would require an additional perception
+                node built on top of the published color/depth streams.
