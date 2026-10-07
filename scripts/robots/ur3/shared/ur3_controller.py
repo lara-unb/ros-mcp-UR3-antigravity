@@ -503,6 +503,65 @@ class UR3AutonomousController:
 
         return trajectory_points, q_start
 
+    def generate_cartesian_line_trajectory(self, p_start, p_end, R_tcp, q_seed, hz=20, min_duration=2.0):
+        """Linha reta cartesiana do TCP (p_start -> p_end, orientação R_tcp constante), com
+        perfil cicloidal (aceleração zero nas pontas) e IK contínua a partir de q_seed.
+        A duração é escolhida para manter a velocidade articular <= MAX_VELOCITY.
+        Retorna (pontos, q_inicial, q_final).
+        """
+        p_start = np.array(p_start, dtype=float)
+        p_end = np.array(p_end, dtype=float)
+        R_tcp = np.array(R_tcp, dtype=float)
+
+        def solve(p, q_prev):
+            q_sol, ok = self.inverse_kinematics_tcp(p, R_tcp, q_prev)
+            if not ok:
+                raise RuntimeError(f"Cinemática Inversa não convergiu no ponto {np.round(p, 4).tolist()}")
+            return q_sol
+
+        # Pré-passo: varre o caminho em s para descobrir max|dq/ds| e dimensionar a duração.
+        n = 100
+        q_path = []
+        q_curr = list(q_seed)
+        for s in np.linspace(0.0, 1.0, n + 1):
+            q_curr = solve(p_start + (p_end - p_start) * s, q_curr)
+            q_path.append(q_curr)
+        q_path = np.array(q_path)
+        max_dq_ds = np.max(np.abs(np.diff(q_path, axis=0))) * n
+        # Pico de ds/dt da curva cicloidal é 2/T.
+        duration = max(min_duration, 1.05 * 2.0 * max_dq_ds / self.MAX_VELOCITY)
+
+        steps = int(duration * hz)
+        times = np.linspace(0.0, duration, steps + 1)
+        q_curr = list(q_seed)
+        q_traj = []
+        for t in times:
+            tau = t / duration
+            s = tau - (1.0 / (2.0 * math.pi)) * math.sin(2.0 * math.pi * tau)
+            q_curr = solve(p_start + (p_end - p_start) * s, q_curr)
+            q_traj.append(q_curr)
+        q_traj = np.array(q_traj)
+
+        for q in q_traj:
+            if not self.check_joint_limits(q):
+                raise RuntimeError("Trajetória violaria os limites de junta do UR3.")
+
+        dt = 1.0 / hz
+        v_traj = np.gradient(q_traj, dt, axis=0)
+        a_traj = np.gradient(v_traj, dt, axis=0)
+        v_traj[0] = v_traj[-1] = 0.0
+        a_traj[0] = a_traj[-1] = 0.0
+
+        points = []
+        for i, tau in enumerate(times):
+            points.append({
+                "positions": q_traj[i].tolist(),
+                "velocities": v_traj[i].tolist(),
+                "accelerations": a_traj[i].tolist(),
+                "time_from_start": {"sec": int(tau), "nanosec": int((tau - int(tau)) * 1e9)},
+            })
+        return points, q_traj[0].tolist(), q_traj[-1].tolist()
+
     async def publish_trajectory(self, trajectory_points):
         """Publica a trajetória no rosbridge_server instantaneamente."""
         if not self.connected:
@@ -576,6 +635,9 @@ class UR3AutonomousController:
                     last_feedback = event.get("values", {})
                 elif event.get("op") == "action_result":
                     values = event.get("values", {})
+                    if not isinstance(values, dict):
+                        # Falha do rosbridge (ex.: control_msgs ausente no container): values é uma string de erro.
+                        return {"success": False, "error": str(values), "last_feedback": last_feedback}
                     success = values.get("error_code", -1) == 0
                     return {"success": success, "result": values, "last_feedback": last_feedback}
             return {"success": False, "error": f"Timeout após {timeout:.1f}s aguardando o resultado da action.", "last_feedback": last_feedback}
